@@ -1,0 +1,48 @@
+name: Daily Job Hunt
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 6 AM UTC = 1 AM EST (2 AM EDT in summer)
+  workflow_dispatch:        # lets you trigger manually from GitHub UI anytime
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore resume from secret
+        run: |
+          mkdir -p resume
+          echo "${{ secrets.RESUME_BASE64 }}" | base64 -d > resume/Vinay_Komirishetty_Resume.pdf
+          echo "Resume restored ($(wc -c < resume/Vinay_Komirishetty_Resume.pdf) bytes)"
+
+      - name: Run Job Hunter
+        env:
+          GROQ_API_KEY:             ${{ secrets.GROQ_API_KEY }}
+          GMAIL_SENDER:             ${{ secrets.GMAIL_SENDER }}
+          GMAIL_APP_PASSWORD:       ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_RECIPIENT:          ${{ secrets.GMAIL_RECIPIENT }}
+          SPREADSHEET_ID:           ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_CREDENTIALS_JSON:  ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        run: python main.py
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs
+          path: "*.log"
+          if-no-files-found: ignore

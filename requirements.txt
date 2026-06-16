@@ -1,0 +1,11 @@
+python-jobspy
+groq
+pymupdf
+streamlit
+python-dotenv
+requests
+pandas
+openpyxl
+schedule
+gspread
+google-auth
