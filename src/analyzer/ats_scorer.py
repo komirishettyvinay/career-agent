@@ -67,9 +67,10 @@ def score_pending_jobs():
     log.info(f"Scoring {len(jobs)} jobs with GROQ...")
 
     for job in jobs:
-        jd = job.get("description", "")
+        jd = job.get("description", "").strip()
         if not jd:
-            continue
+            # No description available — score by title only with low confidence
+            jd = f"Job Title: {job.get('title', '')}\nCompany: {job.get('company', '')}\nLocation: {job.get('location', '')}\n(Full description not available)"
         try:
             result = _score_one(resume, jd)
             update_ats(

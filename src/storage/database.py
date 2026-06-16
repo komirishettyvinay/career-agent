@@ -153,7 +153,6 @@ def get_unscored_jobs(limit: int = 100) -> list[dict]:
     return [
         r for r in _read_all()
         if not str(r.get("ats_score", "")).strip()
-        and str(r.get("description", "")).strip()
     ][:limit]
 
 
