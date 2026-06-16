@@ -31,6 +31,16 @@ jobs:
           echo "${{ secrets.RESUME_BASE64 }}" | base64 -d > resume/Vinay_Komirishetty_Resume.pdf
           echo "Resume restored ($(wc -c < resume/Vinay_Komirishetty_Resume.pdf) bytes)"
 
+      - name: Check secrets are set
+        env:
+          SPREADSHEET_ID:          ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GROQ_API_KEY:            ${{ secrets.GROQ_API_KEY }}
+        run: |
+          echo "SPREADSHEET_ID length: ${#SPREADSHEET_ID}"
+          echo "GOOGLE_CREDENTIALS_JSON length: ${#GOOGLE_CREDENTIALS_JSON}"
+          echo "GROQ_API_KEY length: ${#GROQ_API_KEY}"
+
       - name: Run Job Hunter
         env:
           GROQ_API_KEY:             ${{ secrets.GROQ_API_KEY }}
