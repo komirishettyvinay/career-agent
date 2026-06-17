@@ -76,41 +76,78 @@ if page == "Dashboard":
 # ── Q&A Responder Page ──────────────────────────────────────────────────────
 elif page == "Q&A Responder":
     st.title("💬 Job Application Q&A")
-    st.caption("Paste a question from Workday / Greenhouse / Lever — get an answer using your actual resume.")
+    st.caption("Paste screening questions from any job application — get personalized answers from your resume.")
 
-    # Resolve resume: use local file if present, otherwise ask for upload
+    # Resume: always allow upload; fall back to local file if nothing uploaded
     resume_text = ""
-    if os.path.exists(RESUME_PATH):
+    uploaded = st.file_uploader(
+        "Upload a tailored resume PDF (optional — overrides default resume)",
+        type=["pdf"],
+        key="resume_upload",
+    )
+    if uploaded:
+        resume_text = parse_from_bytes(uploaded.read())
+        st.success("Using uploaded resume.")
+    elif os.path.exists(RESUME_PATH):
         resume_text = get_resume_text()
+        st.caption("Using default resume on file. Upload above to override.")
     else:
-        uploaded = st.file_uploader(
-            "Upload your resume PDF (required on cloud — stored only for this session)",
-            type=["pdf"],
-            key="resume_upload",
-        )
-        if uploaded:
-            resume_text = parse_from_bytes(uploaded.read())
-            st.success("Resume loaded.")
-        else:
-            st.info("Upload your resume PDF above to use the Q&A feature.")
+        st.warning("No resume found. Upload your resume PDF above.")
 
     job_context = st.text_area(
-        "Job context (optional — paste the job title + key requirements)",
-        height=100,
-        placeholder="e.g. Senior Data Engineer at Shopify. Requires: PySpark, Delta Lake, dbt, Airflow...",
+        "Job context (optional — paste job title + key requirements)",
+        height=80,
+        placeholder="e.g. Data Developer at GGC. Requires: Python, SQL, ETL pipelines, Azure...",
     )
 
-    question = st.text_area(
-        "Application question",
-        height=120,
-        placeholder="e.g. Describe your experience designing and optimizing large-scale data pipelines.",
-    )
+    mode = st.radio("Mode", ["Single question", "Multiple questions"], horizontal=True)
 
-    if st.button("Generate Answer", type="primary", disabled=not (question and resume_text)):
-        with st.spinner("Generating personalized answer..."):
-            result = answer(question=question, job_context=job_context, resume_text=resume_text)
-        st.divider()
-        st.subheader("Your Answer")
-        st.write(result)
-        st.divider()
-        st.download_button("Copy as text", data=result, file_name="answer.txt", mime="text/plain")
+    if mode == "Single question":
+        question = st.text_area(
+            "Application question",
+            height=120,
+            placeholder="e.g. Why do you think you will be a fit for this role?",
+        )
+        if st.button("Generate Answer", type="primary", disabled=not (question and resume_text)):
+            with st.spinner("Generating personalized answer..."):
+                result = answer(question=question, job_context=job_context, resume_text=resume_text)
+            st.divider()
+            st.subheader("Your Answer")
+            st.write(result)
+            st.download_button("Copy as text", data=result, file_name="answer.txt", mime="text/plain")
+
+    else:
+        st.caption("Paste all questions — one per line. Number them or not, it doesn't matter.")
+        questions_text = st.text_area(
+            "All application questions",
+            height=200,
+            placeholder="Why do you think you will be a fit for this role?\nDescribe your experience with data pipelines.\nWhat is your expected salary?",
+        )
+
+        if st.button("Generate All Answers", type="primary", disabled=not (questions_text and resume_text)):
+            questions = [q.strip() for q in questions_text.strip().splitlines() if q.strip()]
+            all_answers = []
+
+            progress = st.progress(0, text="Answering questions...")
+            for i, q in enumerate(questions):
+                with st.spinner(f"Question {i+1}/{len(questions)}..."):
+                    ans = answer(question=q, job_context=job_context, resume_text=resume_text)
+                all_answers.append((q, ans))
+                progress.progress((i + 1) / len(questions), text=f"Answered {i+1}/{len(questions)}")
+
+            progress.empty()
+            st.divider()
+
+            full_text = ""
+            for i, (q, ans) in enumerate(all_answers, 1):
+                st.markdown(f"**Q{i}: {q}**")
+                st.write(ans)
+                st.divider()
+                full_text += f"Q{i}: {q}\nA: {ans}\n\n"
+
+            st.download_button(
+                "Download all answers as text",
+                data=full_text.strip(),
+                file_name="application_answers.txt",
+                mime="text/plain",
+            )
