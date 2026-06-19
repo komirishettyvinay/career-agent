@@ -1,35 +1,12 @@
 import requests
-from config.settings import LEVER_COMPANIES, SEARCH_KEYWORDS, LOCATION
+from config.settings import LEVER_COMPANIES, LOCATION
+from src.fetchers._filters import is_canadian as _is_canadian, is_data_role as _is_data_role
 from src.storage.database import make_hash
 
 import logging
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.lever.co/v0/postings/{slug}?mode=json"
-_CANADA_HINTS = {
-    "canada", "toronto", "vancouver", "montreal", "calgary",
-    "ottawa", "edmonton", "winnipeg", "quebec", "remote",
-    "anywhere", "worldwide", "global",
-}
-_EXCLUDE_LOCATIONS = {
-    "united states", "usa", "us only", "london", "uk only",
-    "australia", "india", "germany", "france", "brazil",
-}
-_KW_LOWER = [k.lower() for k in SEARCH_KEYWORDS]
-
-
-def _is_canadian(location: str) -> bool:
-    if not location:
-        return True
-    loc = location.lower()
-    if any(ex in loc for ex in _EXCLUDE_LOCATIONS):
-        return False
-    return any(hint in loc for hint in _CANADA_HINTS)
-
-
-def _is_data_role(title: str) -> bool:
-    t = title.lower()
-    return any(kw in t for kw in _KW_LOWER)
 
 
 def _normalize_role(title: str) -> str:

@@ -22,13 +22,59 @@ GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")   # JSON stri
 GOOGLE_CREDENTIALS_PATH = os.path.join(BASE_DIR, "credentials.json") # local file fallback
 
 # Job search
+# SEARCH_KEYWORDS — used as live search terms on LinkedIn/Indeed (keep narrow:
+# each keyword is a separate scrape, so more = slower + more rate-limit risk).
 SEARCH_KEYWORDS = [
     "Data Engineer",
     "Senior Data Engineer",
 ]
+# DATA_ROLE_KEYWORDS — used to filter job TITLES from ATS boards (Greenhouse/
+# Lever return a company's full job list, so a broad match here = more jobs).
+DATA_ROLE_KEYWORDS = [
+    "data engineer",
+    "data developer",
+    "analytics engineer",
+    "data platform",
+    "data infrastructure",
+    "big data",
+    "etl developer",
+    "etl engineer",
+    "data pipeline",
+    "data warehouse",
+    "datawarehouse",
+    "data architect",
+    "machine learning engineer",
+    "ml engineer",
+    "data ops",
+    "dataops",
+]
 LOCATION = "Canada"
 HOURS_OLD = 48       # fetch jobs posted in last 48 hours
 MAX_JOBS_PER_SOURCE = 50
+
+# Location filtering — shared by all ATS fetchers.
+# A job is kept if its location matches a CANADA_HINT and no EXCLUDE_LOCATION.
+CANADA_HINTS = {
+    "canada", "canadian",
+    # provinces + abbreviations
+    "ontario", "quebec", "québec", "british columbia", "alberta",
+    "manitoba", "saskatchewan", "nova scotia", "new brunswick",
+    "newfoundland", "prince edward",
+    ", on", ", qc", ", bc", ", ab", ", mb", ", sk", ", ns", ", nb",
+    # major cities / tech hubs
+    "toronto", "vancouver", "montreal", "montréal", "calgary", "ottawa",
+    "edmonton", "winnipeg", "kitchener", "waterloo", "mississauga",
+    "brampton", "hamilton", "halifax", "victoria", "markham", "vaughan",
+    "burnaby", "gatineau", "kanata", "oakville", "saskatoon", "regina",
+    "kelowna", "guelph", "london, on", "london, ontario",
+}
+EXCLUDE_LOCATIONS = {
+    "united states", "usa", "u.s.", "us only", "us-based", "us based",
+    "london, uk", "united kingdom", "uk only", "england",
+    "australia", "india", "germany", "france", "brazil", "singapore",
+    "bengaluru", "bangalore", "hyderabad", "pune", "chennai", "mumbai",
+    "ireland", "netherlands", "spain", "poland", "mexico", "philippines",
+}
 
 # ATS score thresholds
 TIER_STRONG = 75
@@ -60,6 +106,19 @@ GREENHOUSE_COMPANIES = [
     "stripe", "plaid", "gusto", "rippling", "lattice",
     "roblox", "unity-technologies", "epic-games",
     "benchling", "duolingo", "canva",
+    # ── More Canadian companies ────────────────────────────────────────────
+    "faire", "clearbanc", "instacart", "lyft", "pinterest",
+    "samsara", "affirm", "doordash", "robinhood", "asana",
+    "gitlab", "okta", "snowflake", "confluentinc", "anthropic",
+    "openai", "scale", "ramp", "airtable", "webflow",
+    "sentry", "render", "supabase", "planetscale", "neon",
+    "modernhealth", "carta", "moderntreasury", "dbtlabs",
+    "thoughtspot", "sigma-computing", "preset", "mode",
+    "fullstory", "postman", "vanta", "drata",
+    # ── Canadian scaleups ──────────────────────────────────────────────────
+    "wave", "knak", "flipp", "sondermind", "wattpad",
+    "later", "jane-app", "kira-systems", "deep-genomics",
+    "blue-j", "ada", "sampler", "voiceflow", "cohere-ai",
 ]
 
 # Companies on Lever (public API — apply links go directly to company career pages)
@@ -77,4 +136,13 @@ LEVER_COMPANIES = [
     "mercury", "remote", "deel", "oyster",
     "klaviyo", "segment", "heap",
     "anomalo", "acceldata", "validio",
+    # ── More Lever-hosted companies ────────────────────────────────────────
+    "plaid", "brex", "nuro", "scaleai", "huggingface",
+    "wealthfront", "betterment", "chime", "upgrade",
+    "faire", "ramp", "rippling", "gusto", "ironclad",
+    "verkada", "samsara", "instabase", "writer",
+    "cresta", "sourcegraph", "temporal", "convoy",
+    "shippo", "rec-room", "fanatics", "attentive",
+    "clari", "gong", "outreach", "chorus",
+    "alloy", "ridgeline", "fundbox", "blend",
 ]

@@ -18,7 +18,7 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 from src.storage.database import init_db, insert_jobs_batch
-from src.fetchers import discovery, workday, smartrecruiters
+from src.fetchers import discovery, workday, smartrecruiters, greenhouse, lever
 from src.analyzer.ats_scorer import score_pending_jobs
 from src.notifier.email_digest import send_digest
 
@@ -26,7 +26,27 @@ from src.notifier.email_digest import send_digest
 def fetch_all() -> int:
     new_count = 0
 
-    # Primary: LinkedIn/Indeed discovery → auto-detect career page ATS
+    # Primary high-volume: query curated Greenhouse company boards directly
+    log.info("── Greenhouse (direct company boards) ──")
+    try:
+        jobs = greenhouse.fetch()
+        new  = insert_jobs_batch(jobs)
+        log.info(f"  Greenhouse: {len(jobs)} found, {new} new")
+        new_count += new
+    except Exception as e:
+        log.error(f"Greenhouse fetcher crashed: {e}")
+
+    # Primary high-volume: query curated Lever company boards directly
+    log.info("── Lever (direct company boards) ──")
+    try:
+        jobs = lever.fetch()
+        new  = insert_jobs_batch(jobs)
+        log.info(f"  Lever: {len(jobs)} found, {new} new")
+        new_count += new
+    except Exception as e:
+        log.error(f"Lever fetcher crashed: {e}")
+
+    # Supplemental: LinkedIn/Indeed discovery → auto-detect career page ATS
     log.info("── Discovery (LinkedIn + Indeed → career pages) ──")
     try:
         jobs = discovery.fetch()
