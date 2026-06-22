@@ -40,22 +40,44 @@ COLUMNS = [
 # Map column name → letter (auto-derived from COLUMNS order)
 _COL = {col: chr(ord("A") + i) for i, col in enumerate(COLUMNS)}
 
+_spreadsheet: gspread.Spreadsheet | None = None
 _worksheet: gspread.Worksheet | None = None
 
 
-def _get_sheet() -> gspread.Worksheet:
-    global _worksheet
-    if _worksheet is not None:
-        return _worksheet
+def _today_tab() -> str:
+    """Worksheet name for the current run, e.g. '2026-06-22'."""
+    return datetime.now().strftime("%Y-%m-%d")
 
+
+def _get_spreadsheet() -> gspread.Spreadsheet:
+    global _spreadsheet
+    if _spreadsheet is not None:
+        return _spreadsheet
     if GOOGLE_CREDENTIALS_JSON:
         creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
         client = gspread.service_account_from_dict(creds_info)
     else:
         client = gspread.service_account(filename=GOOGLE_CREDENTIALS_PATH)
+    _spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    return _spreadsheet
 
-    _worksheet = client.open_by_key(SPREADSHEET_ID).sheet1
-    return _worksheet
+
+def _get_sheet() -> gspread.Worksheet:
+    """Return today's date-named worksheet, creating it (with headers) if missing."""
+    global _worksheet
+    name = _today_tab()
+    if _worksheet is not None and _worksheet.title == name:
+        return _worksheet
+
+    ss = _get_spreadsheet()
+    try:
+        ws = ss.worksheet(name)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = ss.add_worksheet(title=name, rows=2000, cols=len(COLUMNS))
+        ws.insert_row(COLUMNS, 1)
+        log.info(f"Created new sheet tab: {name}")
+    _worksheet = ws
+    return ws
 
 
 def make_hash(url: str) -> str:
@@ -63,13 +85,12 @@ def make_hash(url: str) -> str:
 
 
 def init_db():
-    """Ensure header row matches current COLUMNS (clears sheet if headers changed)."""
+    """Ensure today's sheet exists and its header row matches current COLUMNS."""
     sheet = _get_sheet()
-    current = sheet.row_values(1)
-    if current != COLUMNS:
+    if sheet.row_values(1) != COLUMNS:
         sheet.clear()
         sheet.insert_row(COLUMNS, 1)
-        log.info("Google Sheet initialised / headers updated.")
+        log.info(f"Sheet '{sheet.title}' headers initialised.")
 
 
 def _job_to_row(job: dict) -> list:
@@ -137,9 +158,7 @@ def update_ats(job_hash: str, score: int, matched: str, missing: str,
         log.warning(f"update_ats: {job_hash} not found in sheet.")
 
 
-def _read_all() -> list[dict]:
-    """Read all rows as dicts. Uses get_all_values() for reliability over get_all_records()."""
-    values = _get_sheet().get_all_values()
+def _values_to_dicts(values: list[list]) -> list[dict]:
     if len(values) < 2:
         return []
     headers = values[0]
@@ -147,6 +166,22 @@ def _read_all() -> list[dict]:
         {headers[i]: (row[i] if i < len(row) else "") for i in range(len(headers))}
         for row in values[1:]
     ]
+
+
+def _read_all() -> list[dict]:
+    """Read today's sheet as dicts (used by the same-run scoring/email pipeline)."""
+    return _values_to_dicts(_get_sheet().get_all_values())
+
+
+def _read_all_tabs() -> list[dict]:
+    """Read every date-named tab as dicts (used by the dashboard for history)."""
+    rows: list[dict] = []
+    for ws in _get_spreadsheet().worksheets():
+        try:
+            rows.extend(_values_to_dicts(ws.get_all_values()))
+        except Exception as e:
+            log.debug(f"Skipping tab '{ws.title}': {e}")
+    return rows
 
 
 def get_unscored_jobs(limit: int = 100) -> list[dict]:
@@ -181,7 +216,7 @@ def mark_emailed(job_hashes: list[str]):
 def get_all_jobs(days: int = 7) -> list[dict]:
     cutoff = datetime.utcnow() - timedelta(days=days)
     result = []
-    for r in _read_all():
+    for r in _read_all_tabs():
         try:
             fetched = datetime.strptime(str(r.get("date_fetched", "")), "%Y-%m-%d %H:%M:%S")
             if fetched >= cutoff:
@@ -193,7 +228,7 @@ def get_all_jobs(days: int = 7) -> list[dict]:
 
 
 def get_job_by_hash(job_hash: str) -> dict | None:
-    for r in _read_all():
+    for r in _read_all_tabs():
         if r.get("job_hash") == job_hash:
             return r
     return None
