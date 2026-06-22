@@ -1,12 +1,29 @@
 import json
+import time
 import logging
 from groq import Groq
-from config.settings import GROQ_API_KEY, GROQ_MODEL, TIER_STRONG, TIER_MAYBE
+from config.settings import (
+    GROQ_API_KEY, GROQ_MODEL, TIER_STRONG, TIER_MAYBE,
+    GROQ_DAILY_TOKEN_BUDGET, SCORE_DELAY_SECONDS,
+)
 from src.analyzer.resume_parser import get_resume_text
 from src.storage.database import get_unscored_jobs, update_ats
 
 log = logging.getLogger(__name__)
 _client: Groq | None = None
+
+# Score the most valuable jobs first within the daily budget: real descriptions
+# beat title-only, and direct career-page sources beat LinkedIn/Indeed dupes.
+_SOURCE_PRIORITY = {
+    "greenhouse": 3, "lever": 3,
+    "smartrecruiters": 2, "workday": 2,
+}
+
+
+def _priority(job: dict) -> tuple:
+    src = (job.get("source") or "").split("/")[0].strip().lower()
+    has_desc = 1 if (job.get("description") or "").strip() else 0
+    return (has_desc, _SOURCE_PRIORITY.get(src, 1))
 
 
 def _get_client() -> Groq:
@@ -41,7 +58,8 @@ JOB DESCRIPTION:
 {jd}"""
 
 
-def _score_one(resume: str, jd: str) -> dict:
+def _score_one(resume: str, jd: str) -> tuple[dict, int]:
+    """Return (parsed result, tokens used) for one scoring call."""
     resp = _get_client().chat.completions.create(
         model=GROQ_MODEL,
         messages=[
@@ -52,27 +70,51 @@ def _score_one(resume: str, jd: str) -> dict:
         max_tokens=600,
     )
     raw = resp.choices[0].message.content.strip()
-    return json.loads(raw)
+    used = getattr(resp, "usage", None)
+    tokens = used.total_tokens if used else 0
+    return json.loads(raw), tokens
+
+
+def _is_daily_limit(err: Exception) -> bool:
+    msg = str(err).lower()
+    return "tokens per day" in msg or "tpd" in msg
 
 
 def score_pending_jobs():
-    """Score all jobs that haven't been scored yet."""
+    """Score unscored jobs, best-first, within the daily token budget."""
     resume = get_resume_text()
-    jobs   = get_unscored_jobs(limit=100)
+    jobs   = get_unscored_jobs(limit=500)
 
     if not jobs:
         log.info("No unscored jobs found.")
         return
 
-    log.info(f"Scoring {len(jobs)} jobs with GROQ...")
+    # Quality-first: highest-value jobs scored first within the budget.
+    jobs.sort(key=_priority, reverse=True)
+    log.info(
+        f"{len(jobs)} unscored jobs. Scoring best-first within "
+        f"~{GROQ_DAILY_TOKEN_BUDGET:,} tokens/day, {SCORE_DELAY_SECONDS}s apart."
+    )
 
+    used_tokens = 0
+    scored = 0
     for job in jobs:
+        if used_tokens >= GROQ_DAILY_TOKEN_BUDGET:
+            log.info(
+                f"Daily token budget reached (~{used_tokens:,} tokens). "
+                f"Scored {scored}; remaining {len(jobs) - scored} will be "
+                f"scored on the next run."
+            )
+            break
+
         jd = job.get("description", "").strip()
         if not jd:
             # No description available — score by title only with low confidence
-            jd = f"Job Title: {job.get('title', '')}\nCompany: {job.get('company', '')}\nLocation: {job.get('location', '')}\n(Full description not available)"
+            jd = (f"Job Title: {job.get('title', '')}\nCompany: {job.get('company', '')}\n"
+                  f"Location: {job.get('location', '')}\n(Full description not available)")
         try:
-            result = _score_one(resume, jd)
+            result, tokens = _score_one(resume, jd)
+            used_tokens += tokens
             update_ats(
                 job_hash=job["job_hash"],
                 score=result["ats_score"],
@@ -82,6 +124,16 @@ def score_pending_jobs():
                 summary=result["summary"],
                 skills=json.dumps(result.get("skills_required", [])),
             )
+            scored += 1
             log.info(f"  {job['company']} | {job['title']} → {result['ats_score']}/100 ({result['fit_tier']})")
+            time.sleep(SCORE_DELAY_SECONDS)
         except Exception as e:
+            if _is_daily_limit(e):
+                log.warning(
+                    f"GROQ daily token limit hit. Scored {scored}; "
+                    f"remaining {len(jobs) - scored} will be scored next run."
+                )
+                break
             log.warning(f"Scoring failed for {job['job_hash']}: {e}")
+
+    log.info(f"Scoring complete: {scored} jobs scored this run.")
