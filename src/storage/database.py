@@ -141,21 +141,40 @@ def insert_job(job: dict) -> bool:
     return insert_jobs_batch([job]) == 1
 
 
+def _find_row(job_hash: str, tab: str | None = None):
+    """Locate (worksheet, row) for a job_hash. Searches the given tab first,
+    then falls back to every tab. Returns (None, None) if not found."""
+    ss = _get_spreadsheet()
+    candidates = []
+    if tab:
+        try:
+            candidates.append(ss.worksheet(tab))
+        except gspread.exceptions.WorksheetNotFound:
+            pass
+    candidates += [w for w in ss.worksheets() if w not in candidates]
+    for ws in candidates:
+        try:
+            cell = ws.find(job_hash, in_column=1)
+            if cell:
+                return ws, cell.row
+        except gspread.exceptions.CellNotFound:
+            continue
+    return None, None
+
+
 def update_ats(job_hash: str, score: int, matched: str, missing: str,
-               tier: str, summary: str, skills: str = ""):
-    """Update ATS columns G–L for a job row."""
-    sheet = _get_sheet()
-    try:
-        cell = sheet.find(job_hash, in_column=1)
-        row = cell.row
-        # Columns G→L: fit_tier, ats_score, skills_required, matched, missing, summary
-        start = f"{_COL['fit_tier']}{row}"
-        end   = f"{_COL['ats_summary']}{row}"
-        sheet.update(f"{start}:{end}",
-                     [[tier, score, skills, matched, missing, summary]],
-                     value_input_option="RAW")
-    except gspread.exceptions.CellNotFound:
-        log.warning(f"update_ats: {job_hash} not found in sheet.")
+               tier: str, summary: str, skills: str = "", tab: str | None = None):
+    """Update ATS columns G–L for a job row, in whichever tab the job lives in."""
+    ws, row = _find_row(job_hash, tab)
+    if ws is None:
+        log.warning(f"update_ats: {job_hash} not found in any tab.")
+        return
+    # Columns G→L: fit_tier, ats_score, skills_required, matched, missing, summary
+    start = f"{_COL['fit_tier']}{row}"
+    end   = f"{_COL['ats_summary']}{row}"
+    ws.update(f"{start}:{end}",
+              [[tier, score, skills, matched, missing, summary]],
+              value_input_option="RAW")
 
 
 def _values_to_dicts(values: list[list]) -> list[dict]:
@@ -174,26 +193,29 @@ def _read_all() -> list[dict]:
 
 
 def _read_all_tabs() -> list[dict]:
-    """Read every date-named tab as dicts (used by the dashboard for history)."""
+    """Read every tab as dicts, tagging each row with its source tab (_sheet_tab)."""
     rows: list[dict] = []
     for ws in _get_spreadsheet().worksheets():
         try:
-            rows.extend(_values_to_dicts(ws.get_all_values()))
+            for d in _values_to_dicts(ws.get_all_values()):
+                d["_sheet_tab"] = ws.title
+                rows.append(d)
         except Exception as e:
             log.debug(f"Skipping tab '{ws.title}': {e}")
     return rows
 
 
 def get_unscored_jobs(limit: int = 100) -> list[dict]:
+    # Scan ALL tabs so leftover unscored jobs from past days are picked up too.
     return [
-        r for r in _read_all()
+        r for r in _read_all_tabs()
         if not str(r.get("ats_score", "")).strip()
     ][:limit]
 
 
 def get_unemailed_jobs() -> list[dict]:
     return [
-        r for r in _read_all()
+        r for r in _read_all_tabs()
         if str(r.get("emailed", "0")) == "0"
         and r.get("fit_tier") in ("Strong", "Maybe")
         and str(r.get("ats_score", "")).strip()
@@ -201,16 +223,17 @@ def get_unemailed_jobs() -> list[dict]:
 
 
 def mark_emailed(job_hashes: list[str]):
-    sheet = _get_sheet()
-    updates = []
+    # Group updates per worksheet since jobs may live in different date tabs.
+    per_ws: dict = {}
     for h in job_hashes:
-        try:
-            cell = sheet.find(h, in_column=1)
-            updates.append({"range": f"{_COL['emailed']}{cell.row}", "values": [["1"]]})
-        except gspread.exceptions.CellNotFound:
-            pass
-    if updates:
-        sheet.batch_update(updates, value_input_option="RAW")
+        ws, row = _find_row(h)
+        if ws is None:
+            continue
+        per_ws.setdefault(ws, []).append(
+            {"range": f"{_COL['emailed']}{row}", "values": [["1"]]}
+        )
+    for ws, updates in per_ws.items():
+        ws.batch_update(updates, value_input_option="RAW")
 
 
 def get_all_jobs(days: int = 7) -> list[dict]:

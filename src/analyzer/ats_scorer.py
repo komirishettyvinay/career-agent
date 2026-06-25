@@ -123,6 +123,7 @@ def score_pending_jobs():
                 tier=result["fit_tier"],
                 summary=result["summary"],
                 skills=json.dumps(result.get("skills_required", [])),
+                tab=job.get("_sheet_tab"),
             )
             scored += 1
             log.info(f"  {job['company']} | {job['title']} → {result['ats_score']}/100 ({result['fit_tier']})")
