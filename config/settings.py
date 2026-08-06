@@ -12,6 +12,9 @@ GROQ_DAILY_TOKEN_BUDGET = 95000
 # Seconds to wait between scoring calls — keeps us under the per-minute token
 # limit (~12k TPM) so we sip gently instead of bursting all calls at once.
 SCORE_DELAY_SECONDS = 10
+# Title-only stubs do not contain enough evidence for a meaningful ATS score.
+MIN_DESCRIPTION_CHARS = 300
+MIN_RESUME_CHARS = 500
 
 # Gmail SMTP
 GMAIL_SENDER = os.getenv("GMAIL_SENDER", "komirishettyvinay98@gmail.com")

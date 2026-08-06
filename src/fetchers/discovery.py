@@ -21,6 +21,11 @@ import requests
 from jobspy import scrape_jobs
 
 from config.settings import SEARCH_KEYWORDS, LOCATION, HOURS_OLD, MAX_JOBS_PER_SOURCE
+from src.fetchers._descriptions import (
+    fetch_page_description,
+    html_to_text,
+    lever_description,
+)
 from src.storage.database import make_hash
 
 log = logging.getLogger(__name__)
@@ -107,6 +112,18 @@ def _probe_greenhouse(slug: str, company: str) -> list[dict]:
             url      = j.get("absolute_url", "")
             if not url or not _is_data_role(title) or not _is_canadian(location):
                 continue
+            description = ""
+            job_id = j.get("id")
+            if job_id:
+                try:
+                    detail = requests.get(
+                        f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{job_id}",
+                        timeout=5,
+                    )
+                    if detail.status_code == 200:
+                        description = html_to_text(detail.json().get("content", ""))
+                except requests.RequestException:
+                    pass
             jobs.append({
                 "job_hash":    make_hash(url),
                 "role_name":   _normalize_role(title),
@@ -115,7 +132,7 @@ def _probe_greenhouse(slug: str, company: str) -> list[dict]:
                 "location":    location or LOCATION,
                 "salary":      "",
                 "url":         url,
-                "description": "",
+                "description": description,
                 "source":      f"greenhouse/{slug}",
                 "date_posted": j.get("updated_at", "")[:10],
             })
@@ -139,10 +156,6 @@ def _probe_lever(slug: str, company: str) -> list[dict]:
             url      = j.get("hostedUrl", "")
             if not url or not _is_data_role(title) or not _is_canadian(location):
                 continue
-            desc = "\n".join(
-                s.get("text", "")
-                for s in j.get("descriptionBody", {}).get("content", [])
-            )
             jobs.append({
                 "job_hash":    make_hash(url),
                 "role_name":   _normalize_role(title),
@@ -151,7 +164,7 @@ def _probe_lever(slug: str, company: str) -> list[dict]:
                 "location":    location or LOCATION,
                 "salary":      "",
                 "url":         url,
-                "description": desc.strip(),
+                "description": lever_description(j),
                 "source":      f"lever/{slug}",
                 "date_posted": "",
             })
@@ -191,6 +204,7 @@ def _discover(sites: list[str]) -> list[dict]:
                 location=LOCATION,
                 results_wanted=MAX_JOBS_PER_SOURCE,
                 hours_old=HOURS_OLD,
+                linkedin_fetch_description=True,
                 verbose=0,
             )
             if df is None or df.empty:
@@ -255,6 +269,8 @@ def fetch() -> list[dict]:
         else:
             # No ATS found → use the LinkedIn/Indeed URL directly
             for j in fallback_jobs:
+                if not (j.get("description") or "").strip():
+                    j["description"] = fetch_page_description(j.get("url", ""))
                 _add(j)
             fallback_count += 1
         time.sleep(0.2)  # be polite to ATS APIs

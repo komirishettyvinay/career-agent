@@ -8,7 +8,9 @@ on:
 jobs:
   hunt:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Detail enrichment adds source-specific API calls. Leave enough room for
+    # the one-time backfill/rescore run as well as the normal daily pipeline.
+    timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 

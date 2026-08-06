@@ -1,4 +1,5 @@
 import requests
+from src.fetchers._descriptions import html_to_text
 from config.settings import SEARCH_KEYWORDS, LOCATION
 from src.storage.database import make_hash
 
@@ -6,6 +7,32 @@ import logging
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.smartrecruiters.com/v1/companies/{slug}/postings"
+DETAIL_URL = BASE_URL + "/{job_id}"
+
+
+def _get_description(session: requests.Session, slug: str, job_id: str) -> str:
+    if not job_id:
+        return ""
+    try:
+        response = session.get(
+            DETAIL_URL.format(slug=slug, job_id=job_id), timeout=10
+        )
+        if response.status_code != 200:
+            return ""
+        sections = response.json().get("jobAd", {}).get("sections", {})
+        parts = []
+        for key in (
+            "companyDescription", "jobDescription", "qualifications",
+            "additionalInformation",
+        ):
+            section = sections.get(key) or {}
+            if section.get("title"):
+                parts.append(section["title"])
+            if section.get("text"):
+                parts.append(section["text"])
+        return html_to_text("\n".join(parts))
+    except requests.RequestException:
+        return ""
 
 SMARTRECRUITERS_COMPANIES = [
     # Canadian
@@ -103,8 +130,7 @@ def fetch() -> list[dict]:
                     "location":    loc_str or LOCATION,
                     "salary":      "",
                     "url":         url,
-                    "description": item.get("jobAd", {}).get("sections", {})
-                                      .get("jobDescription", {}).get("text", ""),
+                    "description": _get_description(session, slug, job_id),
                     "source":      "smartrecruiters",
                     "date_posted": item.get("releasedDate", "")[:10],
                 })

@@ -1,4 +1,5 @@
 import requests
+from src.fetchers._descriptions import html_to_text
 from config.settings import GREENHOUSE_COMPANIES, LOCATION
 from src.fetchers._filters import is_canadian as _is_canadian, is_data_role as _is_data_role
 from src.storage.database import make_hash
@@ -7,6 +8,23 @@ import logging
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
+DETAIL_URL = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{job_id}"
+
+
+def _get_description(session: requests.Session, slug: str, job: dict) -> str:
+    """Greenhouse list responses omit content; retrieve the selected job."""
+    job_id = job.get("id")
+    if not job_id:
+        return ""
+    try:
+        response = session.get(
+            DETAIL_URL.format(slug=slug, job_id=job_id), timeout=10
+        )
+        if response.status_code == 200:
+            return html_to_text(response.json().get("content", ""))
+    except requests.RequestException:
+        pass
+    return ""
 
 
 def _normalize_role(title: str) -> str:
@@ -54,7 +72,7 @@ def fetch() -> list[dict]:
                     "location":   location or LOCATION,
                     "salary":     "",  # Greenhouse public API doesn't expose salary
                     "url":        url,
-                    "description": "",
+                    "description": _get_description(session, slug, job),
                     "source":     "greenhouse",
                     "date_posted": job.get("updated_at", "")[:10],
                 })

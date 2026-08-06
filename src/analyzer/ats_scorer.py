@@ -4,7 +4,8 @@ import logging
 from groq import Groq
 from config.settings import (
     GROQ_API_KEY, GROQ_MODEL, TIER_STRONG, TIER_MAYBE,
-    GROQ_DAILY_TOKEN_BUDGET, SCORE_DELAY_SECONDS,
+    GROQ_DAILY_TOKEN_BUDGET, SCORE_DELAY_SECONDS, MIN_DESCRIPTION_CHARS,
+    MIN_RESUME_CHARS,
 )
 from src.analyzer.resume_parser import get_resume_text
 from src.storage.database import get_unscored_jobs, update_ats
@@ -68,11 +69,31 @@ def _score_one(resume: str, jd: str) -> tuple[dict, int]:
         ],
         temperature=0.1,
         max_tokens=600,
+        response_format={"type": "json_object"},
     )
     raw = resp.choices[0].message.content.strip()
     used = getattr(resp, "usage", None)
     tokens = used.total_tokens if used else 0
-    return json.loads(raw), tokens
+    result = json.loads(raw)
+    required = {
+        "ats_score", "skills_required", "matched_keywords",
+        "missing_keywords", "summary",
+    }
+    missing = required.difference(result)
+    if missing:
+        raise ValueError(f"Groq response missing fields: {sorted(missing)}")
+
+    score = max(0, min(100, int(result["ats_score"])))
+    result["ats_score"] = score
+    result["fit_tier"] = (
+        "Strong" if score >= TIER_STRONG
+        else "Maybe" if score >= TIER_MAYBE
+        else "Skip"
+    )
+    for field in ("skills_required", "matched_keywords", "missing_keywords"):
+        if not isinstance(result[field], list):
+            raise ValueError(f"Groq response field '{field}' must be a list")
+    return result, tokens
 
 
 def _is_daily_limit(err: Exception) -> bool:
@@ -83,10 +104,28 @@ def _is_daily_limit(err: Exception) -> bool:
 def score_pending_jobs():
     """Score unscored jobs, best-first, within the daily token budget."""
     resume = get_resume_text()
-    jobs   = get_unscored_jobs(limit=500)
+    if len(resume.strip()) < MIN_RESUME_CHARS:
+        log.error(
+            f"Resume text is missing or too short ({len(resume.strip())} chars); "
+            "ATS scoring aborted so false zero scores are not written."
+        )
+        return
+    pending = get_unscored_jobs(limit=None)
+    ready = [
+        job for job in pending
+        if len((job.get("description") or "").strip()) >= MIN_DESCRIPTION_CHARS
+    ]
+    jobs = ready[:500]
+    missing_descriptions = len(pending) - len(ready)
+
+    if missing_descriptions:
+        log.warning(
+            f"Skipping {missing_descriptions} unscored jobs with descriptions "
+            f"shorter than {MIN_DESCRIPTION_CHARS} characters; they remain pending."
+        )
 
     if not jobs:
-        log.info("No unscored jobs found.")
+        log.info("No unscored jobs with complete descriptions found.")
         return
 
     # Quality-first: highest-value jobs scored first within the budget.
@@ -108,10 +147,6 @@ def score_pending_jobs():
             break
 
         jd = job.get("description", "").strip()
-        if not jd:
-            # No description available — score by title only with low confidence
-            jd = (f"Job Title: {job.get('title', '')}\nCompany: {job.get('company', '')}\n"
-                  f"Location: {job.get('location', '')}\n(Full description not available)")
         try:
             result, tokens = _score_one(resume, jd)
             used_tokens += tokens

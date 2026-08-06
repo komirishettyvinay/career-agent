@@ -1,4 +1,5 @@
 import requests
+from src.fetchers._descriptions import lever_description
 from config.settings import LEVER_COMPANIES, LOCATION
 from src.fetchers._filters import is_canadian as _is_canadian, is_data_role as _is_data_role
 from src.storage.database import make_hash
@@ -65,11 +66,6 @@ def fetch() -> list[dict]:
                 if not url:
                     continue
 
-                # Extract description text
-                desc_raw = ""
-                for section in job.get("descriptionBody", {}).get("content", []):
-                    desc_raw += section.get("text", "") + "\n"
-
                 jobs.append({
                     "job_hash":   make_hash(url),
                     "role_name":  _normalize_role(title),
@@ -78,7 +74,7 @@ def fetch() -> list[dict]:
                     "location":   location or LOCATION,
                     "salary":     _format_salary(job.get("salaryRange", {})),
                     "url":        url,
-                    "description": desc_raw.strip(),
+                    "description": lever_description(job),
                     "source":     "lever",
                     "date_posted": "",
                 })

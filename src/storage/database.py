@@ -6,7 +6,12 @@ from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
 
-from config.settings import SPREADSHEET_ID, GOOGLE_CREDENTIALS_JSON, GOOGLE_CREDENTIALS_PATH
+from config.settings import (
+    SPREADSHEET_ID,
+    GOOGLE_CREDENTIALS_JSON,
+    GOOGLE_CREDENTIALS_PATH,
+    MIN_DESCRIPTION_CHARS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +47,42 @@ _COL = {col: chr(ord("A") + i) for i, col in enumerate(COLUMNS)}
 
 _spreadsheet: gspread.Spreadsheet | None = None
 _worksheet: gspread.Worksheet | None = None
+_known_hashes: set[str] | None = None
+_known_jobs: dict[str, tuple[gspread.Worksheet, int, str]] = {}
+
+
+def _column_values(values: list[list]) -> list[str]:
+    return [row[0] if row else "" for row in values]
+
+
+def _load_known_jobs():
+    """Cache hash locations/descriptions with one Sheets API batch request."""
+    global _known_hashes, _known_jobs
+    if _known_hashes is not None:
+        return
+    _known_hashes = set()
+    _known_jobs = {}
+    spreadsheet = _get_spreadsheet()
+    worksheets = spreadsheet.worksheets()
+    ranges = []
+    for ws in worksheets:
+        title = ws.title.replace("'", "''")
+        ranges.extend([
+            f"'{title}'!A2:A",
+            f"'{title}'!{_COL['description']}2:{_COL['description']}",
+        ])
+    value_ranges = spreadsheet.values_batch_get(ranges).get("valueRanges", [])
+    for index, ws in enumerate(worksheets):
+        hashes_range = value_ranges[index * 2].get("values", [])
+        descriptions_range = value_ranges[index * 2 + 1].get("values", [])
+        hashes = _column_values(hashes_range)
+        descriptions = _column_values(descriptions_range)
+        for offset, job_hash in enumerate(hashes, start=2):
+            if not job_hash:
+                continue
+            description = descriptions[offset - 2] if offset - 2 < len(descriptions) else ""
+            _known_hashes.add(job_hash)
+            _known_jobs[job_hash] = (ws, offset, description)
 
 
 def _today_tab() -> str:
@@ -84,6 +125,45 @@ def make_hash(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()
 
 
+def _format_sheet(sheet: gspread.Worksheet):
+    """Keep long descriptions from expanding data rows to thousands of pixels."""
+    sheet.format(
+        f"A1:{_COL['emailed']}{sheet.row_count}",
+        {
+            "wrapStrategy": "CLIP",
+            "verticalAlignment": "MIDDLE",
+        },
+    )
+    sheet.spreadsheet.batch_update({
+        "requests": [
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": sheet.id,
+                        "dimension": "ROWS",
+                        "startIndex": 0,
+                        "endIndex": 1,
+                    },
+                    "properties": {"pixelSize": 28},
+                    "fields": "pixelSize",
+                }
+            },
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": sheet.id,
+                        "dimension": "ROWS",
+                        "startIndex": 1,
+                        "endIndex": sheet.row_count,
+                    },
+                    "properties": {"pixelSize": 24},
+                    "fields": "pixelSize",
+                }
+            },
+        ]
+    })
+
+
 def init_db():
     """Ensure today's sheet exists and its header row matches current COLUMNS."""
     sheet = _get_sheet()
@@ -91,6 +171,7 @@ def init_db():
         sheet.clear()
         sheet.insert_row(COLUMNS, 1)
         log.info(f"Sheet '{sheet.title}' headers initialised.")
+    _format_sheet(sheet)
 
 
 def _job_to_row(job: dict) -> list:
@@ -118,21 +199,64 @@ def _job_to_row(job: dict) -> list:
 
 
 def insert_jobs_batch(jobs: list[dict]) -> int:
-    """Insert multiple jobs at once, skipping duplicates. Returns count of new rows."""
+    """Insert jobs once across the workbook, rather than once per daily tab."""
+    global _known_hashes
     if not jobs:
         return 0
     sheet = _get_sheet()
-    existing = set(sheet.col_values(1)[1:])  # all job_hashes, skip header
+    _load_known_jobs()
+    existing = _known_hashes
 
     new_rows = []
+    new_jobs = []
+    backfills: dict[gspread.Worksheet, list[dict]] = {}
     for job in jobs:
         if job["job_hash"] in existing:
+            known = _known_jobs.get(job["job_hash"])
+            new_description = (job.get("description") or "").strip()
+            if known:
+                ws, row, old_description = known
+                if (
+                    len((old_description or "").strip()) < MIN_DESCRIPTION_CHARS
+                    and len(new_description) >= MIN_DESCRIPTION_CHARS
+                ):
+                    backfills.setdefault(ws, []).extend([
+                        {
+                            "range": f"{_COL['description']}{row}",
+                            "values": [[new_description[:49000]]],
+                        },
+                        {
+                            "range": f"{_COL['fit_tier']}{row}:{_COL['ats_summary']}{row}",
+                            "values": [["", "", "", "", "", ""]],
+                        },
+                        {
+                            "range": f"{_COL['emailed']}{row}",
+                            "values": [["0"]],
+                        },
+                    ])
+                    _known_jobs[job["job_hash"]] = (ws, row, new_description)
             continue
         existing.add(job["job_hash"])
         new_rows.append(_job_to_row(job))
+        new_jobs.append(job)
 
     if new_rows:
+        first_new_row = len(sheet.col_values(1)) + 1
         sheet.append_rows(new_rows, value_input_option="RAW")
+        for offset, job in enumerate(new_jobs):
+            _known_jobs[job["job_hash"]] = (
+                sheet,
+                first_new_row + offset,
+                job.get("description") or "",
+            )
+
+    for ws, updates in backfills.items():
+        ws.batch_update(updates, value_input_option="RAW")
+    if backfills:
+        log.info(
+            f"Backfilled descriptions and reset stale ATS scores for "
+            f"{sum(len(items) for items in backfills.values()) // 3} jobs."
+        )
 
     return len(new_rows)
 
@@ -205,12 +329,13 @@ def _read_all_tabs() -> list[dict]:
     return rows
 
 
-def get_unscored_jobs(limit: int = 100) -> list[dict]:
+def get_unscored_jobs(limit: int | None = 100) -> list[dict]:
     # Scan ALL tabs so leftover unscored jobs from past days are picked up too.
-    return [
+    jobs = [
         r for r in _read_all_tabs()
         if not str(r.get("ats_score", "")).strip()
-    ][:limit]
+    ]
+    return jobs if limit is None else jobs[:limit]
 
 
 def get_unemailed_jobs() -> list[dict]:

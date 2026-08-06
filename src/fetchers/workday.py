@@ -1,4 +1,5 @@
 import requests
+from src.fetchers._descriptions import html_to_text
 from config.settings import SEARCH_KEYWORDS, LOCATION
 from src.storage.database import make_hash
 
@@ -69,6 +70,24 @@ def _normalize_role(title: str) -> str:
     return "Data Engineer"
 
 
+def _get_description(session: requests.Session, tenant: str, job_site: str,
+                     wd_num: int, external_path: str) -> str:
+    detail_url = (
+        f"https://{tenant}.wd{wd_num}.myworkdayjobs.com"
+        f"/wday/cxs/{tenant}/{job_site}{external_path}"
+    )
+    try:
+        response = session.get(detail_url, timeout=12)
+        if response.status_code != 200:
+            return ""
+        info = response.json().get("jobPostingInfo", {})
+        return html_to_text(
+            info.get("jobDescription") or info.get("jobDescriptionSummary") or ""
+        )
+    except requests.RequestException:
+        return ""
+
+
 def fetch() -> list[dict]:
     jobs = []
     session = requests.Session()
@@ -122,7 +141,9 @@ def fetch() -> list[dict]:
                     "location":   location or LOCATION,
                     "salary":     "",
                     "url":        apply_url,
-                    "description": "",
+                    "description": _get_description(
+                        session, tenant, job_site, wd_num, ext_path
+                    ),
                     "source":     "workday",
                     "date_posted": posted,
                 })
