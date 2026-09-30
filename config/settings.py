@@ -23,6 +23,7 @@ GMAIL_RECIPIENT = os.getenv("GMAIL_RECIPIENT", "komirishettyvinay98@gmail.com")
 # Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESUME_PATH = os.path.join(BASE_DIR, "resume", "Vinay_Komirishetty_Resume.pdf")
+RESUME_TEXT = os.getenv("RESUME_TEXT", "")
 
 # Google Sheets storage
 SPREADSHEET_ID          = os.getenv("SPREADSHEET_ID")

@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from src.analyzer import ats_scorer
+from src.analyzer import resume_parser
 
 
 class AtsScorerTest(unittest.TestCase):
@@ -72,6 +73,16 @@ class AtsScorerTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "failed for all 1"):
             ats_scorer.score_pending_jobs()
+
+
+class ResumeParserTest(unittest.TestCase):
+    def test_environment_resume_text_is_used_without_pdf(self):
+        with patch.object(resume_parser, "_cached_text", None), patch.object(
+            resume_parser, "RESUME_TEXT", "  Resume from GitHub secret.  "
+        ):
+            self.assertEqual(
+                resume_parser.get_resume_text(), "Resume from GitHub secret."
+            )
 
 
 if __name__ == "__main__":

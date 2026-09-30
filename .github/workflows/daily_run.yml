@@ -41,23 +41,14 @@ jobs:
           SPREADSHEET_ID:          ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GROQ_API_KEY:            ${{ secrets.GROQ_API_KEY }}
-          RESUME_BASE64:           ${{ secrets.RESUME_BASE64 }}
+          RESUME_TEXT:             ${{ secrets.RESUME_TEXT }}
         run: |
-          for name in SPREADSHEET_ID GOOGLE_CREDENTIALS_JSON GROQ_API_KEY RESUME_BASE64; do
+          for name in SPREADSHEET_ID GOOGLE_CREDENTIALS_JSON GROQ_API_KEY RESUME_TEXT; do
             if [ -z "${!name}" ]; then
               echo "::error::$name is not configured"
               exit 1
             fi
           done
-
-      - name: Restore resume from secret
-        env:
-          RESUME_BASE64: ${{ secrets.RESUME_BASE64 }}
-        run: |
-          mkdir -p resume
-          printf '%s' "$RESUME_BASE64" | base64 -d > resume/Vinay_Komirishetty_Resume.pdf
-          test -s resume/Vinay_Komirishetty_Resume.pdf
-          echo "Resume restored ($(wc -c < resume/Vinay_Komirishetty_Resume.pdf) bytes)"
 
       - name: Run Job Hunter
         env:
@@ -68,6 +59,7 @@ jobs:
           SPREADSHEET_ID:           ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_CREDENTIALS_JSON:  ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GROQ_MODEL:               openai/gpt-oss-120b
+          RESUME_TEXT:              ${{ secrets.RESUME_TEXT }}
         run: python main.py 2>&1 | tee job-hunter.log
 
       - name: Upload run log

@@ -1,5 +1,5 @@
 import pymupdf
-from config.settings import RESUME_PATH
+from config.settings import RESUME_PATH, RESUME_TEXT
 
 _cached_text: str | None = None
 
@@ -17,6 +17,9 @@ def parse_from_bytes(pdf_bytes: bytes) -> str:
 def get_resume_text() -> str:
     global _cached_text
     if _cached_text:
+        return _cached_text
+    if RESUME_TEXT.strip():
+        _cached_text = RESUME_TEXT.strip()
         return _cached_text
     try:
         doc = pymupdf.open(RESUME_PATH)
