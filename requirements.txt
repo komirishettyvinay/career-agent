@@ -1,4 +1,4 @@
-python-jobspy==1.1.79
+python-jobspy==1.1.82
 groq
 pymupdf
 streamlit

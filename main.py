@@ -3,7 +3,7 @@ Job Hunter — daily runner.
 
 Usage:
   python main.py          # fetch + score + email
-  python main.py --fetch  # fetch only (no scoring, no email)
+  python main.py --fetch  # fetch + score (no email)
   python main.py --score  # score pending jobs only
   python main.py --email  # send email digest only
 """
@@ -23,13 +23,15 @@ from src.analyzer.ats_scorer import score_pending_jobs
 from src.notifier.email_digest import send_digest
 
 
-def fetch_all() -> int:
+def fetch_all() -> tuple[int, int]:
     new_count = 0
+    found_count = 0
 
     # Primary high-volume: query curated Greenhouse company boards directly
     log.info("── Greenhouse (direct company boards) ──")
     try:
         jobs = greenhouse.fetch()
+        found_count += len(jobs)
         new  = insert_jobs_batch(jobs)
         log.info(f"  Greenhouse: {len(jobs)} found, {new} new")
         new_count += new
@@ -40,6 +42,7 @@ def fetch_all() -> int:
     log.info("── Lever (direct company boards) ──")
     try:
         jobs = lever.fetch()
+        found_count += len(jobs)
         new  = insert_jobs_batch(jobs)
         log.info(f"  Lever: {len(jobs)} found, {new} new")
         new_count += new
@@ -50,6 +53,7 @@ def fetch_all() -> int:
     log.info("── Discovery (LinkedIn + Indeed → career pages) ──")
     try:
         jobs = discovery.fetch()
+        found_count += len(jobs)
         new  = insert_jobs_batch(jobs)
         log.info(f"  Discovery: {len(jobs)} total, {new} new")
         new_count += new
@@ -60,6 +64,7 @@ def fetch_all() -> int:
     log.info("── Workday (banks / enterprises) ──")
     try:
         jobs = workday.fetch()
+        found_count += len(jobs)
         new  = insert_jobs_batch(jobs)
         log.info(f"  Workday: {len(jobs)} found, {new} new")
         new_count += new
@@ -69,21 +74,26 @@ def fetch_all() -> int:
     log.info("── SmartRecruiters ──")
     try:
         jobs = smartrecruiters.fetch()
+        found_count += len(jobs)
         new  = insert_jobs_batch(jobs)
         log.info(f"  SmartRecruiters: {len(jobs)} found, {new} new")
         new_count += new
     except Exception as e:
         log.error(f"SmartRecruiters fetcher crashed: {e}")
 
-    return new_count
+    if found_count == 0:
+        raise RuntimeError("All job sources returned zero results.")
+    return new_count, found_count
 
 
 def run(do_fetch=True, do_score=True, do_email=True):
     init_db()
 
     if do_fetch:
-        new = fetch_all()
-        log.info(f"Total new jobs inserted: {new}")
+        new, found = fetch_all()
+        log.info(f"Total jobs found: {found}; new jobs inserted: {new}")
+        # Pulling new data always triggers scoring so no job is left unscored.
+        do_score = True
 
     if do_score:
         log.info("── Scoring jobs with GROQ ──")

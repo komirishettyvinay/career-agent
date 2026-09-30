@@ -34,7 +34,8 @@ class AtsScorerTest(unittest.TestCase):
             "summary": "Strong fit",
         }, 100)
 
-        ats_scorer.score_pending_jobs()
+        with patch.object(ats_scorer, "_get_client"):
+            ats_scorer.score_pending_jobs()
 
         score_one.assert_called_once()
         self.assertIn("Complete job description", score_one.call_args.args[1])
@@ -44,8 +45,33 @@ class AtsScorerTest(unittest.TestCase):
     @patch.object(ats_scorer, "get_unscored_jobs")
     @patch.object(ats_scorer, "get_resume_text", return_value="")
     def test_missing_resume_aborts_before_reading_jobs(self, _resume, get_jobs):
-        ats_scorer.score_pending_jobs()
+        with self.assertRaisesRegex(RuntimeError, "readable resume"):
+            ats_scorer.score_pending_jobs()
         get_jobs.assert_not_called()
+
+    def test_decommissioned_model_error_fails_pipeline(self):
+        error = Exception("The model has been decommissioned")
+        self.assertTrue(ats_scorer._is_fatal_api_error(error))
+
+    @patch.object(ats_scorer.time, "sleep")
+    @patch.object(ats_scorer, "update_ats")
+    @patch.object(ats_scorer, "_score_one", side_effect=ValueError("bad JSON"))
+    @patch.object(ats_scorer, "_get_client")
+    @patch.object(ats_scorer, "get_unscored_jobs")
+    @patch.object(ats_scorer, "get_resume_text")
+    def test_all_scoring_failures_fail_pipeline(
+        self, get_resume, get_jobs, _get_client, _score_one, _update_ats, _sleep
+    ):
+        get_resume.return_value = "resume " * 200
+        get_jobs.return_value = [{
+            "job_hash": "broken",
+            "description": "Complete job description. " * 30,
+            "company": "A",
+            "title": "Data Engineer",
+        }]
+
+        with self.assertRaisesRegex(RuntimeError, "failed for all 1"):
+            ats_scorer.score_pending_jobs()
 
 
 if __name__ == "__main__":

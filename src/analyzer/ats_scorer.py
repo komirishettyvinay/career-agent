@@ -69,6 +69,7 @@ def _score_one(resume: str, jd: str) -> tuple[dict, int]:
         ],
         temperature=0.1,
         max_tokens=600,
+        reasoning_effort="low",
         response_format={"type": "json_object"},
     )
     raw = resp.choices[0].message.content.strip()
@@ -98,10 +99,32 @@ def _score_one(resume: str, jd: str) -> tuple[dict, int]:
 
 def _is_daily_limit(err: Exception) -> bool:
     msg = str(err).lower()
-    return "tokens per day" in msg or "tpd" in msg
+    return (
+        "tokens per day" in msg
+        or "requests per day" in msg
+        or "tpd" in msg
+        or "rpd" in msg
+    )
 
 
-def score_pending_jobs():
+def _is_fatal_api_error(err: Exception) -> bool:
+    status_code = getattr(err, "status_code", None)
+    msg = str(err).lower()
+    return status_code in (401, 403, 404) or any(
+        marker in msg
+        for marker in (
+            "api key",
+            "authentication",
+            "model_decommissioned",
+            "model has been decommissioned",
+            "model does not exist",
+            "model_not_found",
+            "model_permission",
+        )
+    )
+
+
+def score_pending_jobs() -> int:
     """Score unscored jobs, best-first, within the daily token budget."""
     resume = get_resume_text()
     if len(resume.strip()) < MIN_RESUME_CHARS:
@@ -109,7 +132,8 @@ def score_pending_jobs():
             f"Resume text is missing or too short ({len(resume.strip())} chars); "
             "ATS scoring aborted so false zero scores are not written."
         )
-        return
+        raise RuntimeError("ATS scoring requires a readable resume PDF.")
+    _get_client()
     pending = get_unscored_jobs(limit=None)
     ready = [
         job for job in pending
@@ -126,7 +150,7 @@ def score_pending_jobs():
 
     if not jobs:
         log.info("No unscored jobs with complete descriptions found.")
-        return
+        return 0
 
     # Quality-first: highest-value jobs scored first within the budget.
     jobs.sort(key=_priority, reverse=True)
@@ -137,6 +161,9 @@ def score_pending_jobs():
 
     used_tokens = 0
     scored = 0
+    attempted = 0
+    daily_limit_hit = False
+    last_error: Exception | None = None
     for job in jobs:
         if used_tokens >= GROQ_DAILY_TOKEN_BUDGET:
             log.info(
@@ -147,6 +174,7 @@ def score_pending_jobs():
             break
 
         jd = job.get("description", "").strip()
+        attempted += 1
         try:
             result, tokens = _score_one(resume, jd)
             used_tokens += tokens
@@ -165,11 +193,21 @@ def score_pending_jobs():
             time.sleep(SCORE_DELAY_SECONDS)
         except Exception as e:
             if _is_daily_limit(e):
+                daily_limit_hit = True
                 log.warning(
                     f"GROQ daily token limit hit. Scored {scored}; "
                     f"remaining {len(jobs) - scored} will be scored next run."
                 )
                 break
+            if _is_fatal_api_error(e):
+                raise RuntimeError(f"Groq configuration error: {e}") from e
+            last_error = e
             log.warning(f"Scoring failed for {job['job_hash']}: {e}")
 
+    if attempted and not scored and not daily_limit_hit:
+        raise RuntimeError(
+            f"ATS scoring failed for all {attempted} attempted jobs. "
+            f"Last error: {last_error}"
+        )
     log.info(f"Scoring complete: {scored} jobs scored this run.")
+    return scored

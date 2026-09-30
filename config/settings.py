@@ -5,13 +5,12 @@ load_dotenv()
 
 # GROQ
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = "llama-3.3-70b-versatile"
-# Free tier allows ~100k tokens/day on the 70b model. Score the highest-value
-# jobs within this budget (quality-first); the rest are picked up next run.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# Keep headroom below the model's published free-tier daily token limit.
+# Jobs beyond this budget are picked up on the next run.
 GROQ_DAILY_TOKEN_BUDGET = 95000
-# Seconds to wait between scoring calls — keeps us under the per-minute token
-# limit (~12k TPM) so we sip gently instead of bursting all calls at once.
-SCORE_DELAY_SECONDS = 10
+# Space calls out to stay below the model's free-tier per-minute token limit.
+SCORE_DELAY_SECONDS = 20
 # Title-only stubs do not contain enough evidence for a meaningful ATS score.
 MIN_DESCRIPTION_CHARS = 300
 MIN_RESUME_CHARS = 500

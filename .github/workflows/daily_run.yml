@@ -5,43 +5,59 @@ on:
     - cron: '0 6 * * *'   # 6 AM UTC = 1 AM EST (2 AM EDT in summer)
   workflow_dispatch:        # lets you trigger manually from GitHub UI anytime
 
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-job-hunt
+  cancel-in-progress: false
+
 jobs:
   hunt:
     runs-on: ubuntu-latest
     # Detail enrichment adds source-specific API calls. Leave enough room for
     # the one-time backfill/rescore run as well as the normal daily pipeline.
     timeout-minutes: 60
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Restore resume from secret
         run: |
-          mkdir -p resume
-          echo "${{ secrets.RESUME_BASE64 }}" | base64 -d > resume/Vinay_Komirishetty_Resume.pdf
-          echo "Resume restored ($(wc -c < resume/Vinay_Komirishetty_Resume.pdf) bytes)"
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
-      - name: Check secrets are set
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Validate required secrets
         env:
           SPREADSHEET_ID:          ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GROQ_API_KEY:            ${{ secrets.GROQ_API_KEY }}
+          RESUME_BASE64:           ${{ secrets.RESUME_BASE64 }}
         run: |
-          echo "SPREADSHEET_ID length: ${#SPREADSHEET_ID}"
-          echo "GOOGLE_CREDENTIALS_JSON length: ${#GOOGLE_CREDENTIALS_JSON}"
-          echo "GROQ_API_KEY length: ${#GROQ_API_KEY}"
+          for name in SPREADSHEET_ID GOOGLE_CREDENTIALS_JSON GROQ_API_KEY RESUME_BASE64; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not configured"
+              exit 1
+            fi
+          done
+
+      - name: Restore resume from secret
+        env:
+          RESUME_BASE64: ${{ secrets.RESUME_BASE64 }}
+        run: |
+          mkdir -p resume
+          printf '%s' "$RESUME_BASE64" | base64 -d > resume/Vinay_Komirishetty_Resume.pdf
+          test -s resume/Vinay_Komirishetty_Resume.pdf
+          echo "Resume restored ($(wc -c < resume/Vinay_Komirishetty_Resume.pdf) bytes)"
 
       - name: Run Job Hunter
         env:
@@ -51,12 +67,13 @@ jobs:
           GMAIL_RECIPIENT:          ${{ secrets.GMAIL_RECIPIENT }}
           SPREADSHEET_ID:           ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_CREDENTIALS_JSON:  ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-        run: python main.py
+          GROQ_MODEL:               openai/gpt-oss-120b
+        run: python main.py 2>&1 | tee job-hunter.log
 
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
-          name: failure-logs
-          path: "*.log"
+          name: job-hunter-log-${{ github.run_id }}
+          path: job-hunter.log
           if-no-files-found: ignore

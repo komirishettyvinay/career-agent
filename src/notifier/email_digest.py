@@ -166,3 +166,4 @@ def send_digest():
         log.info(f"Email sent with Excel ({len(jobs)} jobs) to {GMAIL_RECIPIENT}")
     except Exception as e:
         log.error(f"Email send failed: {e}")
+        raise RuntimeError("Email digest delivery failed.") from e
